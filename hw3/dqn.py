@@ -159,6 +159,17 @@ class QLearner(object):
     ######
 
     # YOUR CODE HERE
+    self.q_current = q_func(obs_t_float, self.num_actions, scope="q_func", reuse=False)
+    self.q_target = q_func(obs_tp1_float, self.num_actions, scope="target_q_func", reuse=False)
+
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_func')
+
+    q_act_t = tf.reduce_sum(self.q_current * tf.one_hot(self.act_t_ph, self.num_actions), axis=1)
+
+    y = self.rew_t_ph + (1.0 - self.done_mask_ph) * gamma * tf.reduce_max(self.q_target, axis=1)
+
+    self.total_error = tf.losses.mean_squared_error(y, q_act_t)
 
     ######
 
@@ -229,6 +240,27 @@ class QLearner(object):
     #####
 
     # YOUR CODE HERE
+    self.replay_buffer_idx = self.replay_buffer.store_frame(self.last_obs)
+    
+    if self.t == 0:
+      act, reward, done = self.env.action_space.sample(), 0, False
+
+    eps = self.exploration.value(self.t)
+    if not self.model_initialized or random.random() < eps:
+      # With probability epsilon OR if model hasn't been initialized, choose a random action
+      act = self.env.action_space.sample()
+    else:
+      input_batch = self.replay_buffer.encode_recent_observation()
+      q_vals = self.session.run(self.q_current, {self.obs_t_ph: input_batch[None, :]})
+      act = np.argmax(q_vals)
+
+    # step ahead
+    self.last_obs, reward, done, info = self.env.step(act)
+    self.replay_buffer.store_effect(self.replay_buffer_idx, act, reward, done)
+
+    if done:
+      self.last_obs = self.env.reset()
+      done = False
 
   def update_model(self):
     ### 3. Perform experience replay and train the network.
@@ -274,9 +306,30 @@ class QLearner(object):
       #####
 
       # YOUR CODE HERE
+      obs_t_batch, act_t_batch, rew_t_batch, obs_tp1_batch, done_mask_t_batch = self.replay_buffer.sample(self.batch_size)
 
-      self.num_param_updates += 1
+      if not self.model_initialized:
+        initialize_interdependent_variables(self.session, tf.global_variables(), 
+                      {
+                        self.obs_t_ph: obs_t_batch,
+                        self.obs_tp1_ph: obs_tp1_batch
+                      })
+        self.session.run(self.update_target_fn)
+        self.model_initialized = True
+      
+      self.session.run(self.train_fn, 
+                      {
+                        self.obs_t_ph: obs_t_batch, 
+                        self.act_t_ph: act_t_batch,
+                        self.rew_t_ph: rew_t_batch,
+                        self.obs_tp1_ph: obs_tp1_batch,
+                        self.done_mask_ph: done_mask_t_batch,
+                        self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+                      })
 
+      if self.num_param_updates % self.target_update_freq == 0:
+        self.session.run(self.update_target_fn)
+        self.num_param_updates += 1
     self.t += 1
 
   def log_progress(self):

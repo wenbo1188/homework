@@ -69,6 +69,9 @@ def main():
         expert_data = {'observations': np.array(observations),
                        'actions': np.array(actions)}
 
+        print(expert_data["observations"][0].shape)
+        print(expert_data["actions"][0].shape)
+
         with open(os.path.join('expert_data', args.envname + '.pkl'), 'wb') as f:
             pickle.dump(expert_data, f, pickle.HIGHEST_PROTOCOL)
 
